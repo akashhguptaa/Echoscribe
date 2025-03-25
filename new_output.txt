@@ -1,0 +1,569 @@
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Button.tsx---------
+import React from "react";
+
+interface ButtonProps {
+  text: string;
+  onClick: () => void;
+}
+
+const Button: React.FC<ButtonProps> = ({ text, onClick }) => {
+  return (
+    <button
+      onClick={onClick}
+      className="cursor-pointer px-6 py-2 bg-[#22BDBD] text-white rounded-full shadow-md hover:bg-teal-500 transition duration-300"
+    >
+      {text}
+    </button>
+  );
+};
+
+export default Button;
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\HeroSection.tsx---------
+import Button from "./Button";
+import { useState } from "react";
+import Upload from "./Upload";
+
+interface HeroProps{
+    start: boolean;
+    setStart: (value: boolean) => void;
+}
+
+export default function HeroSection({start, setStart}: HeroProps) {
+
+  return (
+    <div className="h-screen flex items-center justify-between pt-16">
+      <div className="ml-20 max-w-lg">
+        <h1 className="text-4xl font-bold mb-4 text-black">
+          Transform Your Audio & Video into Clear, Structured Text
+        </h1>
+        <p className="text-lg text-slate-600 mb-6">
+          Effortlessly convert your recordings into accurate transcriptions,
+          concise summaries, and well-formatted text. Let our AI handle the
+          work—fast and efficiently—so you can save time and focus on what
+          matters.
+        </p>
+        <Button text="Get Started" onClick={() => setStart(true)} />
+      </div>
+      {!start &&(
+      <div className="mr-20 pt-6 pb-6 ">
+        <img
+          src="/Group 4 (1).png"
+          alt="Illustration showing AI transcription"
+          className="max-w-md object-contain max-h-[calc(100vh-10rem)]"
+        />
+      </div>
+      )}
+      
+
+      {start &&(
+      <div className = "mr-20">
+          <Upload />
+        </div>
+        )}
+        
+    </div>
+  );
+}
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Navbar.tsx---------
+import Button from "./Button";
+import { AudioWaveform } from "lucide-react";
+
+interface NavbarProps {
+  resetStart: () => void;
+}
+
+export default function Navbar({ resetStart }: NavbarProps) {
+  return (
+    <div className="fixed top-0 left-0 w-full p-4 flex items-center justify-between bg-white/40 backdrop-filter backdrop-blur-md border-b border-white/20 shadow-sm">
+      <div className=" cursor-pointer ml-20 flex items-center gap-2" onClick={() => resetStart()}>
+        <AudioWaveform className="text-[#22BDBD] font-bold" />
+        <span className="text-black text-3xl">
+          Echo<span className="font-bold text-primary">Scribe</span>
+        </span>
+      </div>
+      <nav id="navbar-content" className="text-md text-slate-500 mr-20 flex">
+        <div className="flex gap-6 items-center">
+          <a href="#contact">Contact</a>
+          <a href="#about">About</a>
+          <Button text="Demo" onClick={() => alert("Button Clicked!")} />
+        </div>
+      </nav>
+    </div>
+  );
+}
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Upload.tsx---------
+import React, { useCallback, useRef, useState } from "react";
+import { useDropzone } from "react-dropzone";
+import { useRouter } from "next/router";
+
+const Upload: React.FC = () => {
+  const router = useRouter();
+  const ws = useRef<WebSocket | null>(null);
+  const [uploading, setUploading] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+    if (acceptedFiles.length === 0) return;
+    const file = acceptedFiles[0];
+    setUploading(true);
+    setUploadProgress(0);
+
+    const fileKey = `${Date.now()}_${file.name}`;
+    let fileDuration = 0;
+
+    ws.current = new WebSocket("ws://localhost:8005/ws/transcription");
+
+    ws.current.onopen = () => {
+      console.log("WebSocket connected");
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const arrayBuffer = reader.result as ArrayBuffer;
+        const clonedArrayBuffer = arrayBuffer.slice(0);
+
+        // 1. decode the original audio.
+        const audioContext = new AudioContext();
+        let audioBuffer;
+
+        try {
+          // For MP4 files, we need to extract the audio track
+          if (file.type.includes("video")) {
+            // Create a video element to extract audio from video
+            const video = document.createElement("video");
+            video.src = URL.createObjectURL(file);
+
+            // Wait for metadata to load
+            await new Promise((resolve) => {
+              video.onloadedmetadata = () => {
+                fileDuration = video.duration;
+                resolve(null);
+              };
+            });
+
+            // Create a media element source
+            const mediaElementSource =
+              audioContext.createMediaElementSource(video);
+
+            // Create a destination to capture the audio
+            const destination = audioContext.createMediaStreamDestination();
+            mediaElementSource.connect(destination);
+
+            // Play the video (muted) to extract audio
+            video.muted = true;
+            await video.play();
+
+            // Record the audio
+            const recorder = new MediaRecorder(destination.stream);
+            const chunks: BlobEvent[] = [];
+
+            recorder.ondataavailable = (e) => {
+              chunks.push(e);
+            };
+
+            const recordedData = await new Promise<ArrayBuffer>((resolve) => {
+              recorder.onstop = async () => {
+                const blob = new Blob(
+                  chunks.map((chunk) => chunk.data),
+                  { type: "audio/webm" }
+                );
+                const arrayBuffer = await blob.arrayBuffer();
+                resolve(arrayBuffer);
+              };
+
+              recorder.start();
+
+              // Only record what we need
+              setTimeout(() => {
+                recorder.stop();
+                video.pause();
+                URL.revokeObjectURL(video.src);
+              }, video.duration * 1000);
+            });
+
+            audioBuffer = await audioContext.decodeAudioData(recordedData);
+          } else {
+            // For audio files (WAV, MP3)
+            audioBuffer = await audioContext.decodeAudioData(clonedArrayBuffer);
+            fileDuration = audioBuffer.duration;
+          }
+        } catch (error) {
+          console.error("Error decoding audio data:", error);
+          setUploading(false);
+          return;
+        }
+
+        // 2. convert to mono if necessary.
+        if (audioBuffer.numberOfChannels > 1) {
+          const monoBuffer = audioContext.createBuffer(
+            1,
+            audioBuffer.length,
+            audioBuffer.sampleRate
+          );
+          const monoData = monoBuffer.getChannelData(0);
+          // average the channels.
+          for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+            const channelData = audioBuffer.getChannelData(ch);
+            for (let i = 0; i < channelData.length; i++) {
+              monoData[i] += channelData[i] / audioBuffer.numberOfChannels;
+            }
+          }
+          audioBuffer = monoBuffer;
+        }
+
+        // 3. resample the audio to 16kHz.
+        const targetSampleRate = 16000;
+        const offlineContext = new OfflineAudioContext(
+          1,
+          Math.ceil(audioBuffer.duration * targetSampleRate),
+          targetSampleRate
+        );
+        const source = offlineContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(offlineContext.destination);
+        source.start(0);
+        const resampledBuffer = await offlineContext.startRendering();
+
+        // 4. convert the resampled Float32 data to 16-bit PCM.
+        const float32Data = resampledBuffer.getChannelData(0);
+        const int16Data = new Int16Array(float32Data.length);
+        for (let i = 0; i < float32Data.length; i++) {
+          // clamp the value between -1 and 1.
+          const s = Math.max(-1, Math.min(1, float32Data[i]));
+          int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+
+        // 5. define chunking parameters (in samples).
+        const chunkDurationSec = 2; // 2 seconds per chunk.
+        const paddingDurationSec = 0.15; // 150ms padding.
+        const chunkSamples = targetSampleRate * chunkDurationSec;
+        const paddingSamples = Math.floor(
+          targetSampleRate * paddingDurationSec
+        );
+        const totalSamples = int16Data.length;
+        let offset = 0;
+        const totalChunks = Math.ceil(totalSamples / chunkSamples);
+        let chunksSent = 0;
+
+        function int16ArrayToBase64(buffer: Int16Array) {
+          let binary = "";
+          // each 16-bit value is split into two bytes (little endian).
+          for (let i = 0; i < buffer.length; i++) {
+            binary += String.fromCharCode(
+              buffer[i] & 0xff,
+              (buffer[i] >> 8) & 0xff
+            );
+          }
+          return btoa(binary);
+        }
+
+        // 6. chunk the audio with overlap and send over WebSocket.
+        const sendChunk = () => {
+          if (offset < totalSamples) {
+            const start = Math.max(0, offset - paddingSamples);
+            const end = Math.min(
+              totalSamples,
+              offset + chunkSamples + paddingSamples
+            );
+            const chunk = int16Data.slice(start, end);
+            offset += chunkSamples;
+            chunksSent++;
+
+            console.log(
+              `Sending chunk ${chunksSent}/${totalChunks}, Size: ${chunk.length}`
+            );
+
+            const base64Chunk = int16ArrayToBase64(chunk);
+            const isFinal = offset >= totalSamples;
+            const message = {
+              key: `${fileKey}_${offset}`,
+              chunk: base64Chunk,
+              final: isFinal,
+            };
+
+            ws.current?.send(JSON.stringify(message));
+
+            if (!isFinal) {
+              setTimeout(sendChunk, 10);
+            } else {
+              setUploading(false);
+              console.log("All chunks sent!");
+            }
+          }
+        };
+
+        sendChunk();
+      };
+      reader.readAsArrayBuffer(file);
+    };
+
+    ws.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      // We don't process transcription results here anymore
+      // That happens on the transcribe page
+    };
+
+    ws.current.onerror = (error) => {
+      console.error("WebSocket error", error);
+      setUploading(false);
+    };
+
+    ws.current.onclose = () => {
+      console.log("WebSocket closed");
+    };
+  }, []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      "audio/*": [".wav", ".mp3"],
+      "video/*": [".mp4"],
+    },
+  });
+
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <div
+        className="bg-background p-8 rounded-[33px]"
+        style={{ boxShadow: "0px 4px 8px rgba(0, 0, 0, 0.15)" }}
+      >
+        <div
+          {...getRootProps()}
+          className="border-2 border-dashed border-gray-300 rounded-[33px] p-8 text-center cursor-pointer hover:border-purple-400 flex flex-col items-center justify-center"
+          style={{ width: "420px", height: "350px" }}
+        >
+          <input {...getInputProps()} />
+          {isDragActive ? (
+            <p>Land it here...</p>
+          ) : uploading ? (
+            <div className="flex flex-col items-center">
+              <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
+                <div
+                  className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+              <p>Processing... {uploadProgress}%</p>
+              <p className="text-sm text-gray-500 mt-2">
+                You'll be redirected shortly
+              </p>
+            </div>
+          ) : (
+            <>
+              <button className="bg-purple-600 text-white px-6 py-2 rounded-full font-semibold hover:bg-purple-700 focus:outline-none">
+                Upload Audio/Video
+              </button>
+              <p className="text-gray-600 mt-4">or drop a file</p>
+              <p className="text-gray-500 mt-2 text-sm">
+                Supported formats: WAV, MP3, MP4
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Upload;
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\index.tsx---------
+import Navbar from '@/components/Navbar'
+import HeroSection from '@/components/HeroSection'
+import { useState } from 'react'
+
+export default function Home(){
+   const [start, setStart] = useState<boolean>(false)
+   const resetStart = ()=>{
+    setStart(false)
+   }
+  return(
+    <div className='bg-gradient-to-r from-[#E0F5F8] to-transparent '>
+
+    <Navbar resetStart={resetStart}/>
+    <HeroSection  start={start} setStart={setStart}/>
+    </div>
+  )
+}
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\transcribe.tsx---------
+import React, { useState, useEffect, useRef } from "react";
+import Navbar from "@/components/Navbar";
+import { useRouter } from "next/router";
+import { motion } from "framer-motion";
+
+const Transcribe: React.FC = () => {
+  const router = useRouter();
+  const [transcription, setTranscription] = useState<string>("");
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(true);
+  const [fileName, setFileName] = useState<string>("");
+  const [duration, setDuration] = useState<string>("0:00");
+  const [progress, setProgress] = useState<number>(0);
+  const transcriptionRef = useRef<HTMLDivElement>(null);
+  const ws = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const { fileKey, name, duration } = router.query;
+    if (fileKey) {
+      if (name) setFileName(name as string);
+      if (duration) {
+        const durationNum = parseFloat(duration as string);
+        const minutes = Math.floor(durationNum / 60);
+        const seconds = Math.floor(durationNum % 60);
+        setDuration(`${minutes}:${seconds.toString().padStart(2, '0')}`);
+      }
+      connectWebSocket(fileKey as string);
+    } else {
+      router.replace("/");
+    }
+    return () => { ws.current?.close(); };
+  }, [router.isReady, router.query]);
+
+  const connectWebSocket = (fileKey: string) => {
+    ws.current = new WebSocket("ws://localhost:8005/ws/transcription");
+    ws.current.onopen = () => {
+      console.log("WebSocket connected in transcribe page");
+      ws.current?.send(JSON.stringify({ action: "connect_to_session", key: fileKey }));
+    };
+    ws.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.text) {
+        setTranscription(data.text);
+        setProgress(data.final ? 100 : Math.min(progress + 5, 95));
+        if (data.final) {
+          setIsTranscribing(false);
+          setProgress(100);
+        }
+      }
+    };
+    ws.current.onerror = (error) => {
+      console.error("WebSocket error", error);
+    };
+    ws.current.onclose = () => {
+      console.log("WebSocket closed");
+    };
+  };
+
+  useEffect(() => {
+    if (transcriptionRef.current) {
+      transcriptionRef.current.scrollTop = transcriptionRef.current.scrollHeight;
+    }
+  }, [transcription]);
+
+  const handleNewTranscription = () => {
+    router.push("/");
+  };
+
+  // Instead of resetting local state, navigate back home.
+  const resetStart = () => {
+    router.push("/");
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar resetStart={resetStart}/>
+      <div className="container max-w-6xl mx-auto px-4 py-8">
+        <h1 className="text-3xl font-bold text-center mb-8 text-purple-800">
+          Audio Transcription
+        </h1>
+        <div className="mb-8 transition-all duration-500">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center">
+              <motion.div 
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.5 }}
+                className="text-xl font-medium"
+              >
+                {fileName || "Transcription"}
+              </motion.div>
+              <span className="ml-4 text-sm text-gray-500">{duration}</span>
+            </div>
+            <div className="flex items-center">
+              {isTranscribing && (
+                <div className="flex items-center mr-4">
+                  <div className="animate-pulse h-2 w-2 bg-red-600 rounded-full mr-2"></div>
+                  <span className="text-sm text-gray-600">Transcribing...</span>
+                </div>
+              )}
+              <button 
+                onClick={handleNewTranscription}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition"
+              >
+                New Transcription
+              </button>
+            </div>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2 mb-6">
+            <motion.div 
+              className="bg-purple-600 h-2 rounded-full"
+              initial={{ width: "0%" }}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.5 }}
+            />
+          </div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="bg-white rounded-xl shadow-lg p-6 mb-6"
+          >
+            {transcription ? (
+              <div ref={transcriptionRef} className="max-h-[500px] overflow-y-auto whitespace-pre-wrap prose prose-lg">
+                {transcription}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <div className="inline-block animate-bounce mb-4">
+                  <svg className="w-8 h-8 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                  </svg>
+                </div>
+                <p className="text-gray-500">Processing your audio...</p>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Transcribe;
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\_app.tsx---------
+import "@/styles/globals.css";
+import type { AppProps } from "next/app";
+import { Inter } from "next/font/google";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <main className={inter.className}>
+      <Component {...pageProps} />
+    </main>
+  );
+}
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\_document.tsx---------
+import { Html, Head, Main, NextScript } from "next/document";
+
+export default function Document() {
+  return (
+    <Html lang="en">
+      <Head />
+      <body className="antialiased">
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  );
+}
+

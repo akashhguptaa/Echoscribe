@@ -1,6 +1,6 @@
 import Button from "./Button";
 import { useState } from "react";
-import Upload from "./upload";
+import Upload from "./Upload";
 
 interface HeroProps{
     start: boolean;
@@ -12,7 +12,7 @@ export default function HeroSection({start, setStart}: HeroProps) {
   return (
     <div className="h-screen flex items-center justify-between pt-16">
       <div className="ml-20 max-w-lg">
-        <h1 className="text-4xl font-bold mb-4 text-slate-800">
+        <h1 className="text-4xl font-bold mb-4 text-black">
           Transform Your Audio & Video into Clear, Structured Text
         </h1>
         <p className="text-lg text-slate-600 mb-6">
@@ -39,6 +39,7 @@ export default function HeroSection({start, setStart}: HeroProps) {
           <Upload />
         </div>
         )}
+        
     </div>
   );
 }
