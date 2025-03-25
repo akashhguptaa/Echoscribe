@@ -1,3 +1,4 @@
 env
 ui/.next
 ui/node_modules
+.env

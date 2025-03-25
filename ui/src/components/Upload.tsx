@@ -1,168 +1,195 @@
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import { useRouter } from "next/router";
-import Button from "@/components/Button";
-import { useWebSocket } from "@/context/WebSocketContext";
 
-interface FileUploadProps {
-  onUploadStart?: (fileName: string) => void;
+interface UploadProps {
+  setTranscription: (text: string) => void;
 }
 
-const Upload: React.FC<FileUploadProps> = ({ onUploadStart }) => {
-  const router = useRouter();
-  const { ws, connectWebSocket, isConnected } = useWebSocket();
-  const [file, setFile] = useState<File | null>(null);
-  const [error, setError] = useState<string | null>(null);
+const Upload: React.FC<UploadProps> = ({ setTranscription }) => {
+  const ws = useRef<WebSocket | null>(null);
+  const [uploading, setUploading] = useState<boolean>(false);
 
-  // Constants
-  const CHUNK_SIZE: number = 1024 * 1024; // 1MB chunks
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-
-  // Send file in chunks via WebSocket
-  const sendFileInChunks = useCallback(
-    async (websocket: WebSocket, file: File) => {
-      return new Promise<void>((resolve, reject) => {
-        const fileSize = file.size;
-        let offset = 0;
-
-        const reader = new FileReader();
-
-        const sendChunk = () => {
-          const chunk = file.slice(
-            offset,
-            Math.min(offset + CHUNK_SIZE, fileSize)
-          );
-          reader.readAsArrayBuffer(chunk);
-        };
-
-        reader.onload = (e) => {
-          if (websocket.readyState === WebSocket.OPEN && e.target?.result) {
-            websocket.send(e.target.result);
-            offset += (e.target.result as ArrayBuffer).byteLength;
-
-            if (offset < fileSize) {
-              setTimeout(sendChunk, 0);
-            } else {
-              // Send small EOF marker
-              const eofMarker = new ArrayBuffer(8);
-              websocket.send(eofMarker);
-              resolve();
-            }
-          } else {
-            reject(new Error("WebSocket is not open"));
-          }
-        };
-
-        reader.onerror = (err) => {
-          reject(err);
-        };
-
-        sendChunk();
-      });
-    },
-    []
-  );
-
-  // Handle file upload
-  const handleUpload = useCallback(
-    async (file: File) => {
-      if (!file) {
-        setError("Please select a file first");
-        return;
-      }
-
-      if (file.size > MAX_FILE_SIZE) {
-        setError("File size exceeds 100MB limit");
-        return;
-      }
-
-      // Ensure WebSocket connection
-      const websocket = ws || connectWebSocket();
-
-      // Wait a bit to ensure connection is established
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Redirect to transcription page immediately
-      router.push({
-        pathname: "/transcribe",
-        query: { fileName: file.name },
-      });
-
-      // Trigger onUploadStart callback if provided
-      onUploadStart?.(file.name);
-
-      try {
-        await sendFileInChunks(websocket, file);
-      } catch (err) {
-        console.error("Error sending file:", err);
-        setError(`Failed to send file: ${(err as Error).message}`);
-        websocket.close();
-      }
-    },
-    [router, sendFileInChunks, onUploadStart, ws, connectWebSocket]
-  );
-
-  // Dropzone configuration
   const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
+    (acceptedFiles: File[]) => {
       if (acceptedFiles.length === 0) return;
-
       const file = acceptedFiles[0];
-      const allowedTypes = ["video/mp4"];
+      setTranscription("");
+      setUploading(true);
 
-      if (allowedTypes.includes(file.type)) {
-        setFile(file);
-        setError(null);
-        await handleUpload(file);
-      } else {
-        setError("Please upload an MP4 file");
-      }
+      const fileKey = `${Date.now()}_${file.name}`;
+
+      ws.current = new WebSocket("ws://localhost:8005/ws/transcription");
+
+      ws.current.onopen = () => {
+        console.log("WebSocket connected");
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const arrayBuffer = reader.result as ArrayBuffer;
+          const clonedArrayBuffer = arrayBuffer.slice(0);
+
+          // 1. decode the original audio.
+          const audioContext = new AudioContext();
+          let audioBuffer = await audioContext.decodeAudioData(
+            clonedArrayBuffer
+          );
+
+          // 2. convert to mono if necessary.
+          if (audioBuffer.numberOfChannels > 1) {
+            const monoBuffer = audioContext.createBuffer(
+              1,
+              audioBuffer.length,
+              audioBuffer.sampleRate
+            );
+            const monoData = monoBuffer.getChannelData(0);
+            // average the channels.
+            for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+              const channelData = audioBuffer.getChannelData(ch);
+              for (let i = 0; i < channelData.length; i++) {
+                monoData[i] += channelData[i] / audioBuffer.numberOfChannels;
+              }
+            }
+            audioBuffer = monoBuffer;
+          }
+
+          // 3. resample the audio to 16kHz.
+          const targetSampleRate = 16000;
+          const offlineContext = new OfflineAudioContext(
+            1,
+            Math.ceil(audioBuffer.duration * targetSampleRate),
+            targetSampleRate
+          );
+          const source = offlineContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(offlineContext.destination);
+          source.start(0);
+          const resampledBuffer = await offlineContext.startRendering();
+
+          // 4. convert the resampled Float32 data to 16-bit PCM.
+          const float32Data = resampledBuffer.getChannelData(0);
+          const int16Data = new Int16Array(float32Data.length);
+          for (let i = 0; i < float32Data.length; i++) {
+            // clamp the value between -1 and 1.
+            const s = Math.max(-1, Math.min(1, float32Data[i]));
+            int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+
+          // 5. define chunking parameters (in samples).
+          const chunkDurationSec = 2; // 2 seconds per chunk.
+          const paddingDurationSec = 0.15; // 150ms padding.
+          const chunkSamples = targetSampleRate * chunkDurationSec;
+          const paddingSamples = Math.floor(
+            targetSampleRate * paddingDurationSec
+          );
+          const totalSamples = int16Data.length;
+          let offset = 0;
+
+          function int16ArrayToBase64(buffer: Int16Array) {
+            let binary = "";
+            // each 16-bit value is split into two bytes (little endian).
+            for (let i = 0; i < buffer.length; i++) {
+              binary += String.fromCharCode(
+                buffer[i] & 0xff,
+                (buffer[i] >> 8) & 0xff
+              );
+            }
+            return btoa(binary);
+          }
+
+          // 6. chuk the audio with overlap and send over WebSocket.
+          const sendChunk = () => {
+            if (offset < totalSamples) {
+              // calculate start and end indices (with padding on both sides).
+              const start = Math.max(0, offset - paddingSamples);
+              const end = Math.min(
+                totalSamples,
+                offset + chunkSamples + paddingSamples
+              );
+              const chunk = int16Data.slice(start, end);
+              offset += chunkSamples;
+
+              // convert the PCM chunk to base64.
+              const base64Chunk = int16ArrayToBase64(chunk);
+              const isFinal = offset >= totalSamples;
+              const message = {
+                key: `${fileKey}_${offset}`,
+                chunk: base64Chunk,
+                final: isFinal,
+              };
+              ws.current?.send(JSON.stringify(message));
+
+              setTimeout(sendChunk, 10);
+            }
+          };
+
+          sendChunk();
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      ws.current.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.key.startsWith(fileKey) && data.text) {
+          console.log("Received transcription:", data.text);
+          setTranscription(data.text);
+          if (data.final) {
+            setUploading(false);
+          }
+        }
+      };
+
+      ws.current.onerror = (error) => {
+        console.error("WebSocket error", error);
+        setUploading(false);
+      };
+
+      ws.current.onclose = () => {
+        console.log("WebSocket closed");
+      };
     },
-    [handleUpload]
+    [setTranscription]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      "video/*": [".mp4"],
+      "audio/*": [".wav"],
     },
   });
 
-  // Add a useEffect to handle connection status
-  useEffect(() => {
-    if (!isConnected) {
-      connectWebSocket();
-    }
-  }, [isConnected, connectWebSocket]);
-
   return (
     <div className="flex flex-col items-center justify-center">
+      {/* <div className="relative w-[420px] mb-6">
+                <img
+                    src="/assets/doctor_images.png"
+                    alt="Stick figures"
+                    className="absolute left-1/2 top-0 w-[320px] h-auto transform -translate-x-1/2 -translate-y-3/4"
+                    style={{ mixBlendMode: "multiply" }}
+                />
+            </div> */}
+
       <div
         className="bg-background p-8 rounded-[49px]"
         style={{ boxShadow: "0px 4px 8px rgba(0, 0, 0, 0.15)" }}
       >
         <div
           {...getRootProps()}
-          className="border-2 border-dashed border-gray-300 rounded-[33px] p-8 text-center cursor-pointer hover:border-teal-600 flex flex-col items-center justify-center"
+          className="border-2 border-dashed border-gray-300 rounded-[33px] p-8 text-center cursor-pointer hover:border-teal-400 flex flex-col items-center justify-center"
           style={{ width: "420px", height: "350px" }}
         >
           <input {...getInputProps()} />
           {isDragActive ? (
-            <p>Drop the file here...</p>
+            <p>Land it here...</p>
           ) : (
             <>
-              <button className="cursor-pointer px-6 py-2 bg-teal-700 text-white rounded-full shadow-md hover:bg-teal-500 transition duration-300">
-                Upload Video(mp4)
+              <button className="bg-teal-700 text-white px-6 py-2 rounded-full font-semibold hover:bg-teal-700 focus:outline-none">
+                Upload Audio
               </button>
               <p className="text-gray-600 mt-4">or drop a file</p>
-              <p className="text-gray-500 mt-2 text-sm">
-                Supported formats: MP4
-              </p>
-              {error && <p className="text-red-500 mt-2">{error}</p>}
             </>
           )}
         </div>
       </div>
+      {uploading && <p>Streaming audio and waiting for transcription...</p>}
     </div>
   );
 };

@@ -1,0 +1,615 @@
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Button.tsx---------
+import React from "react";
+
+interface ButtonProps {
+  text: string;
+  onClick: () => void;
+}
+
+const Button: React.FC<ButtonProps> = ({ text, onClick }) => {
+  return (
+    <button
+      onClick={onClick}
+      className="cursor-pointer px-6 py-2 bg-teal-700 text-white rounded-full shadow-md hover:bg-teal-500 transition duration-300"
+    >
+      {text}
+    </button>
+  );
+};
+
+export default Button;
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\HeroSection.tsx---------
+import Button from "./Button";
+import { useState } from "react";
+import Upload from "./Upload";
+import { useCallback } from "react";
+
+interface HeroProps {
+  start: boolean;
+  setStart: (value: boolean) => void;
+}
+
+export default function HeroSection({ start, setStart }: HeroProps) {
+
+  return (
+    <div className="h-screen flex items-center justify-between pt-16">
+      <div className="ml-20 max-w-lg">
+        <h1 className="text-4xl font-bold mb-4 text-black">
+          Transform Your Audio & Video into Clear, Structured Text
+        </h1>
+        <p className="text-lg text-slate-600 mb-6">
+          Effortlessly convert your recordings into accurate transcriptions,
+          concise summaries, and well-formatted text. Let our AI handle the
+          work—fast and efficiently—so you can save time and focus on what
+          matters.
+        </p>
+        <Button text="Get Started" onClick={() => setStart(true)} />
+      </div>
+      {!start && (
+        <div className="mr-20 pt-6 pb-6 ">
+          <img
+            src="/Group 4 (1).png"
+            alt="Illustration showing AI transcription"
+            className="max-w-md object-contain max-h-[calc(100vh-10rem)]"
+          />
+        </div>
+      )}
+
+      {start && (
+        <div className="mr-20">
+          <Upload />
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Navbar.tsx---------
+import Button from "./Button";
+import { AudioWaveform } from "lucide-react";
+
+interface NavbarProps {
+  resetStart: (prop: boolean) => void;
+}
+
+export default function Navbar({ resetStart }: NavbarProps) {
+  return (
+    <div className="fixed top-0 left-0 w-full p-4 flex items-center justify-between bg-white/40 backdrop-filter backdrop-blur-md border-b border-white/20 shadow-sm">
+      <div
+        className=" cursor-pointer ml-20 flex items-center gap-2"
+        onClick={() => resetStart(false)}
+      >
+        <AudioWaveform className="text-[#22BDBD] font-bold" />
+        <span className="text-black text-3xl">
+          Echo<span className="font-bold text-teal-700">Scribe</span>
+        </span>
+      </div>
+      <nav id="navbar-content" className="text-md text-slate-500 mr-20 flex">
+        <div className="flex gap-6 items-center">
+          <a href="#contact">Contact</a>
+          <a href="#about">About</a>
+          <Button text="Start" onClick={() => resetStart(true)} />
+        </div>
+      </nav>
+    </div>
+  );
+}
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Transcribe.tsx---------
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/router';
+import { motion } from 'framer-motion';
+import Navbar from '@/components/Navbar';
+import { useWebSocket } from '@/context/WebSocketContext';
+
+const Transcribe: React.FC = () => {
+  const router = useRouter();
+  const { fileName } = router.query;
+  const transcriptionRef = useRef<HTMLDivElement>(null);
+  const [summary, setSummary] = useState<string>('')
+  
+  const { ws, disconnectWebSocket } = useWebSocket();
+  const [isTranscribing, setIsTranscribing] = useState(true);
+  const [transcription, setTranscription] = useState('');
+  const [fullTranscript, setFullTranscript] = useState('');
+  
+  // New state for toggle
+  const [activeView, setActiveView] = useState<'transcription' | 'summary'>('transcription');
+
+  // Handle reset functionality
+  const handleReset = useCallback(() => {
+    // Close WebSocket and clear connection
+    disconnectWebSocket();
+    
+    // Navigate back to upload page
+    router.push('/');
+  }, [disconnectWebSocket, router]);
+
+  // Copy transcript to clipboard
+  const handleCopyTranscript = useCallback(() => {
+    const textToCopy = activeView === 'transcription' ? fullTranscript : summary;
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy)
+        .then(() => {
+          alert(`${activeView.charAt(0).toUpperCase() + activeView.slice(1)} copied to clipboard`);
+        })
+        .catch(err => {
+          console.error('Failed to copy', err);
+        });
+    }
+  }, [fullTranscript, summary, activeView]);
+
+  // Listen to WebSocket messages
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Received WebSocket message:', data); // Debugging log
+
+        switch (data.status) {
+          case "transcribing":
+            // Accumulate partial transcriptions
+            setTranscription(prev => prev + (data.text || ''));
+            break;
+          case "chunk_update":
+            // Handle chunk updates if needed
+            console.log('Chunk update:', data);
+            break;
+          case "completed":
+            setIsTranscribing(false);
+            setFullTranscript(data.full_transcript || data.text || '');
+            setSummary(data.summary || '')
+            break;
+          case "error":
+            setIsTranscribing(false);
+            setTranscription('Error during transcription');
+            break;
+          default:
+            console.log('Unhandled message:', data);
+        }
+      } catch (err) {
+        console.error("Error parsing WebSocket message:", err);
+      }
+    };
+
+    ws.addEventListener('message', handleMessage);
+
+    return () => {
+      ws.removeEventListener('message', handleMessage);
+    };
+  }, [ws]);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-r from-[#E0F5F8] to-transparent pt-20">
+      <Navbar resetStart={handleReset} />
+      <div className="container max-w-6xl mx-auto px-4 py-8">
+        <h1 className="text-3xl font-bold text-center mb-8 text-teal-800">
+          Audio Transcription
+        </h1>
+        <div className="mb-8 transition-all duration-500">
+          {isTranscribing ? (
+            <div className="text-center py-12">
+              <div className="inline-block animate-bounce mb-4">
+                <svg
+                  className="w-8 h-8 text-[#22BDBD]"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 14l-7 7m0 0l-7-7m7 7V3"
+                  />
+                </svg>
+              </div>
+              <p className="text-gray-500">Processing your audio...</p>
+              <p className="text-sm text-gray-400 mt-2">
+                Transcribing: {fileName}
+              </p>
+              {transcription && (
+                <div className="mt-4 text-left max-w-2xl mx-auto bg-white p-4 rounded-lg shadow-md">
+                  <p className="text-gray-700">{transcription}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
+              className="bg-white rounded-xl shadow-lg p-6 mb-6"
+            >
+              {/* New Toggle Section */}
+              {(fullTranscript || summary) && (
+                <div className="flex justify-between items-center mb-4">
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => setActiveView('transcription')}
+                      className={`px-4 py-2 rounded-md transition-colors ${
+                        activeView === 'transcription' 
+                          ? 'bg-[#22BDBD] text-white' 
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      Transcription
+                    </button>
+                    {summary && (
+                      <button
+                        onClick={() => setActiveView('summary')}
+                        className={`px-4 py-2 rounded-md transition-colors ${
+                          activeView === 'summary' 
+                            ? 'bg-[#22BDBD] text-white' 
+                            : 'bg-gray-200 text-gray-700'
+                        }`}
+                      >
+                        Summary
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleCopyTranscript}
+                    className="text-[#22BDBD] hover:text-teal-700 transition-colors"
+                  >
+                    Copy {activeView.charAt(0).toUpperCase() + activeView.slice(1)}
+                  </button>
+                </div>
+              )}
+              
+              <div
+                ref={transcriptionRef}
+                className="max-h-[500px] overflow-y-auto whitespace-pre-wrap prose prose-lg text-gray-800"
+              >
+                {activeView === 'transcription' 
+                  ? (fullTranscript || "No transcription available.")
+                  : (summary || "No summary available.")
+                }
+              </div>
+            </motion.div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Transcribe;
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\components\Upload.tsx---------
+import React, { useCallback, useState, useEffect } from "react";
+import { useDropzone } from "react-dropzone";
+import { useRouter } from "next/router";
+import Button from "@/components/Button";
+import { useWebSocket } from "@/context/WebSocketContext";
+
+interface FileUploadProps {
+  onUploadStart?: (fileName: string) => void;
+}
+
+const Upload: React.FC<FileUploadProps> = ({ onUploadStart }) => {
+  const router = useRouter();
+  const { ws, connectWebSocket, isConnected } = useWebSocket();
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Constants
+  const CHUNK_SIZE: number = 1024 * 1024; // 1MB chunks
+  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
+  // Send file in chunks via WebSocket
+  const sendFileInChunks = useCallback(
+    async (websocket: WebSocket, file: File) => {
+      return new Promise<void>((resolve, reject) => {
+        const fileSize = file.size;
+        let offset = 0;
+
+        const reader = new FileReader();
+
+        const sendChunk = () => {
+          const chunk = file.slice(
+            offset,
+            Math.min(offset + CHUNK_SIZE, fileSize)
+          );
+          reader.readAsArrayBuffer(chunk);
+        };
+
+        reader.onload = (e) => {
+          if (websocket.readyState === WebSocket.OPEN && e.target?.result) {
+            websocket.send(e.target.result);
+            offset += (e.target.result as ArrayBuffer).byteLength;
+
+            if (offset < fileSize) {
+              setTimeout(sendChunk, 0);
+            } else {
+              // Send small EOF marker
+              const eofMarker = new ArrayBuffer(8);
+              websocket.send(eofMarker);
+              resolve();
+            }
+          } else {
+            reject(new Error("WebSocket is not open"));
+          }
+        };
+
+        reader.onerror = (err) => {
+          reject(err);
+        };
+
+        sendChunk();
+      });
+    },
+    []
+  );
+
+  // Handle file upload
+  const handleUpload = useCallback(
+    async (file: File) => {
+      if (!file) {
+        setError("Please select a file first");
+        return;
+      }
+
+      if (file.size > MAX_FILE_SIZE) {
+        setError("File size exceeds 100MB limit");
+        return;
+      }
+
+      // Ensure WebSocket connection
+      const websocket = ws || connectWebSocket();
+
+      // Wait a bit to ensure connection is established
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Redirect to transcription page immediately
+      router.push({
+        pathname: "/transcribe",
+        query: { fileName: file.name },
+      });
+
+      // Trigger onUploadStart callback if provided
+      onUploadStart?.(file.name);
+
+      try {
+        await sendFileInChunks(websocket, file);
+      } catch (err) {
+        console.error("Error sending file:", err);
+        setError(`Failed to send file: ${(err as Error).message}`);
+        websocket.close();
+      }
+    },
+    [router, sendFileInChunks, onUploadStart, ws, connectWebSocket]
+  );
+
+  // Dropzone configuration
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      if (acceptedFiles.length === 0) return;
+
+      const file = acceptedFiles[0];
+      const allowedTypes = ["video/mp4"];
+
+      if (allowedTypes.includes(file.type)) {
+        setFile(file);
+        setError(null);
+        await handleUpload(file);
+      } else {
+        setError("Please upload an MP4 file");
+      }
+    },
+    [handleUpload]
+  );
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      "video/*": [".mp4"],
+    },
+  });
+
+  // Add a useEffect to handle connection status
+  useEffect(() => {
+    if (!isConnected) {
+      connectWebSocket();
+    }
+  }, [isConnected, connectWebSocket]);
+
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <div
+        className="bg-background p-8 rounded-[49px]"
+        style={{ boxShadow: "0px 4px 8px rgba(0, 0, 0, 0.15)" }}
+      >
+        <div
+          {...getRootProps()}
+          className="border-2 border-dashed border-gray-300 rounded-[33px] p-8 text-center cursor-pointer hover:border-teal-600 flex flex-col items-center justify-center"
+          style={{ width: "420px", height: "350px" }}
+        >
+          <input {...getInputProps()} />
+          {isDragActive ? (
+            <p>Drop the file here...</p>
+          ) : (
+            <>
+              <button className="cursor-pointer px-6 py-2 bg-teal-700 text-white rounded-full shadow-md hover:bg-teal-500 transition duration-300">
+                Upload Video(mp4)
+              </button>
+              <p className="text-gray-600 mt-4">or drop a file</p>
+              <p className="text-gray-500 mt-2 text-sm">
+                Supported formats: MP4
+              </p>
+              {error && <p className="text-red-500 mt-2">{error}</p>}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Upload;
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\context\WebSocketContext.tsx---------
+import React, { createContext, useState, useContext, useEffect, ReactNode, useCallback } from 'react';
+
+interface WebSocketContextType {
+  ws: WebSocket | null;
+  connectWebSocket: () => WebSocket;
+  disconnectWebSocket: () => void;
+  isConnected: boolean;
+}
+
+const WebSocketContext = createContext<WebSocketContextType>({
+  ws: null,
+  connectWebSocket: () => {
+    throw new Error('WebSocket context not initialized');
+  },
+  disconnectWebSocket: () => {},
+  isConnected: false,
+});
+
+export const WebSocketProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+
+  const connectWebSocket = useCallback(() => {
+    // Close existing WebSocket if it exists
+    if (ws) {
+      ws.close();
+    }
+
+    const newWs = new WebSocket("ws://localhost:8000/ws");
+    newWs.binaryType = "arraybuffer";
+
+    newWs.onopen = () => {
+      console.log('WebSocket connection established');
+      setIsConnected(true);
+    };
+
+    newWs.onclose = () => {
+      console.log('WebSocket connection closed');
+      setIsConnected(false);
+    };
+
+    newWs.onerror = (error) => {
+      console.error("WebSocket error:", error);
+      setIsConnected(false);
+    };
+
+    setWs(newWs);
+    return newWs;
+  }, [ws]);
+
+  const disconnectWebSocket = useCallback(() => {
+    if (ws) {
+      ws.close();
+      setWs(null);
+      setIsConnected(false);
+    }
+  }, [ws]);
+
+  // Automatic reconnection mechanism
+  useEffect(() => {
+    if (!isConnected) {
+      const reconnectTimer = setTimeout(() => {
+        connectWebSocket();
+      }, 1000);
+
+      return () => clearTimeout(reconnectTimer);
+    }
+  }, [isConnected, connectWebSocket]);
+
+  // Cleanup WebSocket on component unmount
+  useEffect(() => {
+    return () => {
+      disconnectWebSocket();
+    };
+  }, [disconnectWebSocket]);
+
+  return (
+    <WebSocketContext.Provider value={{ ws, connectWebSocket, disconnectWebSocket, isConnected }}>
+      {children}
+    </WebSocketContext.Provider>
+  );
+};
+
+export const useWebSocket = () => useContext(WebSocketContext);
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\index.tsx---------
+import Navbar from '../components/Navbar'
+import HeroSection from '../components/HeroSection'
+import { useState, useCallback } from 'react'
+
+
+export default function Home(){
+   const [start, setStart] = useState<boolean>(false)
+   const resetStart = useCallback((prop: boolean) => setStart(prop), []);
+
+  return(
+    <div className='bg-gradient-to-r from-[#E0F5F8] to-transparent '>
+
+    <Navbar resetStart={resetStart}/>
+    <HeroSection  start={start} setStart={setStart}/>
+    </div>
+  )
+}
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\transcribe.tsx---------
+import Navbar from '../components/Navbar'
+import { useState } from 'react'
+import Transcribe from '@/components/Transcribe'
+
+export default function Home(){
+   const [start, setStart] = useState<boolean>(false)
+   const resetStart = ()=>{
+    setStart(false)
+   }
+  return(
+    <div className='bg-gradient-to-r from-[#E0F5F8] to-transparent '>
+
+    {/* <Navbar resetStart={resetStart}/> */}
+    <Transcribe />
+    </div>
+  )
+}
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\_app.tsx---------
+import "@/styles/globals.css";
+import type { AppProps } from "next/app";
+import { Inter } from "next/font/google";
+import { WebSocketProvider } from "@/context/WebSocketContext";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export default function App({ Component, pageProps }: AppProps) {
+  return (
+    <main className={inter.className}>
+      <WebSocketProvider>
+        <Component {...pageProps} />
+      </WebSocketProvider>
+    </main>
+  );
+}
+
+
+----------C:\Users\akash\OneDrive\Documents\web_dev\just_for_fun\echoScribe\ui\src\pages\_document.tsx---------
+import { Html, Head, Main, NextScript } from "next/document";
+
+export default function Document() {
+  return (
+    <Html lang="en">
+      <Head />
+      <body className="antialiased">
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  );
+}
+
