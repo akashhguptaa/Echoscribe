@@ -1,13 +1,14 @@
 import Button from "./Button";
 import { useState } from "react";
 import Upload from "./Upload";
+import { useCallback } from "react";
 
-interface HeroProps{
-    start: boolean;
-    setStart: (value: boolean) => void;
+interface HeroProps {
+  start: boolean;
+  setStart: (value: boolean) => void;
 }
 
-export default function HeroSection({start, setStart}: HeroProps) {
+export default function HeroSection({ start, setStart }: HeroProps) {
 
   return (
     <div className="h-screen flex items-center justify-between pt-16">
@@ -23,23 +24,21 @@ export default function HeroSection({start, setStart}: HeroProps) {
         </p>
         <Button text="Get Started" onClick={() => setStart(true)} />
       </div>
-      {!start &&(
-      <div className="mr-20 pt-6 pb-6 ">
-        <img
-          src="/Group 4 (1).png"
-          alt="Illustration showing AI transcription"
-          className="max-w-md object-contain max-h-[calc(100vh-10rem)]"
-        />
-      </div>
+      {!start && (
+        <div className="mr-20 pt-6 pb-6 ">
+          <img
+            src="/Group 4 (1).png"
+            alt="Illustration showing AI transcription"
+            className="max-w-md object-contain max-h-[calc(100vh-10rem)]"
+          />
+        </div>
       )}
-      
 
-      {start &&(
-      <div className = "mr-20">
+      {start && (
+        <div className="mr-20">
           <Upload />
         </div>
-        )}
-        
+      )}
     </div>
   );
 }
